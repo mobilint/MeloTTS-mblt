@@ -19,7 +19,7 @@ Models run on Mobilint [ARIES](https://www.mobilint.com/aries) and [REGULUS](htt
 boards. Supported target-device identifiers are `aries-rb`, `regulus-ra`, `regulus-rb`, `regulus-ra-usb`, and
 `regulus-rb-usb`.
 
-Version `0.0.0` is the first standalone release. It was extracted from `mblt-model-zoo` 2.10.0.
+Version `0.0.0` is the first standalone release. It was extracted from `mblt-model-zoo` 2.11.0.
 
 ## Installation
 

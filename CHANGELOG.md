@@ -4,7 +4,7 @@
 
 ### Added
 
-- Initial standalone release, extracted from `mblt-model-zoo` 2.10.0 (`mblt_model_zoo.MeloTTS`, `origin/master`
+- Initial standalone release, extracted from `mblt-model-zoo` 2.11.0 (`mblt_model_zoo.MeloTTS`, `origin/master`
   `083b5d6`). The `TTS` API, NPU-backed synthesizer, and English/Korean text processing are carried over under the
   `melotts_mblt` namespace (`from mblt_model_zoo.MeloTTS.api import TTS` → `from melotts_mblt import TTS`).
 - `melotts-mblt` command with `tts` (the Click MeloTTS CLI), `ui` (the Gradio WebUI), and `download` (NLTK tagger and
