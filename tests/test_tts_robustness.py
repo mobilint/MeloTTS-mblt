@@ -46,11 +46,33 @@ def test_fit_pieces_to_bert_splits_unbroken_runs_by_character() -> None:
     assert all(len(piece) + 2 <= 10 for piece in pieces)
 
 
-@pytest.mark.parametrize("speed", [0, -1.0, math.nan, math.inf, True])
+@pytest.mark.parametrize(
+    "speed", [0, -1.0, math.nan, math.inf, True, np.bool_(True), "1.2", np.float32(0), np.float64("nan"), [1.0]]
+)
 def test_tts_to_file_rejects_invalid_speed(speed: object) -> None:
     tts = _bare_tts()
     with pytest.raises(ValueError, match="speed"):
         tts.tts_to_file("hello", 0, speed=speed)
+
+
+@pytest.mark.parametrize(
+    ("speed", "expected"),
+    [
+        (1, 1.0),
+        (1.25, 1.25),
+        (np.float32(1.5), 1.5),
+        (np.float64(0.8), 0.8),
+        (np.int64(2), 2.0),
+        (torch.tensor(1.5), 1.5),
+        (__import__("fractions").Fraction(1, 2), 0.5),
+        (__import__("decimal").Decimal("1.1"), 1.1),
+    ],
+)
+def test_validate_speed_accepts_real_scalars(speed: object, expected: float) -> None:
+    """Numeric scalars the original implementation accepted keep working, normalized to ``float``."""
+    value = melo_api._validate_speed(speed)
+    assert isinstance(value, float)
+    assert value == pytest.approx(expected)
 
 
 @pytest.mark.parametrize("speed", ["0", "-1", "nan", "inf"])

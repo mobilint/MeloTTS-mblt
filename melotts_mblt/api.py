@@ -23,6 +23,23 @@ from .split_utils import split_sentence
 from .text.cleaner import clean_text
 
 
+def _validate_speed(speed):
+    """Return ``speed`` as a ``float`` if it is a finite real number greater than 0, else raise ``ValueError``.
+
+    Any real scalar ``float()`` accepts is allowed (``int``, ``float``, NumPy scalars, 0-d tensors, ``Fraction``,
+    ``Decimal``). Booleans and strings are rejected even though ``float()`` would convert them.
+    """
+    if isinstance(speed, (bool, np.bool_, str, bytes)):
+        raise ValueError(f"speed must be a finite number greater than 0, got {speed!r}")
+    try:
+        value = float(speed)
+    except (TypeError, ValueError):
+        raise ValueError(f"speed must be a finite number greater than 0, got {speed!r}") from None
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"speed must be a finite number greater than 0, got {speed!r}")
+    return value
+
+
 class TTS(nn.Module):
     def __init__(self, 
                 language,
@@ -205,8 +222,7 @@ class TTS(nn.Module):
         return pieces
 
     def tts_to_file(self, text, speaker_id, output_path=None, sdp_ratio=0.2, noise_scale=0.6, noise_scale_w=0.8, speed=1.0, pbar=None, format=None, position=None, quiet=False):
-        if isinstance(speed, bool) or not isinstance(speed, (int, float)) or not math.isfinite(speed) or speed <= 0:
-            raise ValueError(f"speed must be a finite number greater than 0, got {speed!r}")
+        speed = _validate_speed(speed)
         language = self.language
         texts = self.fit_pieces_to_bert(self.split_sentences_into_pieces(text, language, quiet), language)
         audio_list = []
