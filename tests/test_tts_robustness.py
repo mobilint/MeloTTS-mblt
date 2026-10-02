@@ -47,7 +47,21 @@ def test_fit_pieces_to_bert_splits_unbroken_runs_by_character() -> None:
 
 
 @pytest.mark.parametrize(
-    "speed", [0, -1.0, math.nan, math.inf, True, np.bool_(True), "1.2", np.float32(0), np.float64("nan"), [1.0]]
+    "speed",
+    [
+        0,
+        -1.0,
+        math.nan,
+        math.inf,
+        True,
+        np.bool_(True),
+        "1.2",
+        np.float32(0),
+        np.float64("nan"),
+        [1.0],
+        # Finite but too large for a float (OverflowError); an explicit id avoids rendering a 10,001-digit int.
+        pytest.param(10**10000, id="int-overflowing-float"),
+    ],
 )
 def test_tts_to_file_rejects_invalid_speed(speed: object) -> None:
     tts = _bare_tts()

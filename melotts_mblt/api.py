@@ -23,20 +23,30 @@ from .split_utils import split_sentence
 from .text.cleaner import clean_text
 
 
+def _describe_value(value):
+    """``repr(value)`` for error messages, falling back to the type when ``repr`` itself fails (e.g. huge ints)."""
+    try:
+        return repr(value)
+    except Exception:
+        return f"<{type(value).__name__}>"
+
+
 def _validate_speed(speed):
     """Return ``speed`` as a ``float`` if it is a finite real number greater than 0, else raise ``ValueError``.
 
     Any real scalar ``float()`` accepts is allowed (``int``, ``float``, NumPy scalars, 0-d tensors, ``Fraction``,
     ``Decimal``). Booleans and strings are rejected even though ``float()`` would convert them.
     """
+    message = "speed must be a finite number greater than 0, got {}"
     if isinstance(speed, (bool, np.bool_, str, bytes)):
-        raise ValueError(f"speed must be a finite number greater than 0, got {speed!r}")
+        raise ValueError(message.format(_describe_value(speed)))
     try:
         value = float(speed)
-    except (TypeError, ValueError):
-        raise ValueError(f"speed must be a finite number greater than 0, got {speed!r}") from None
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: a finite real too large for a float, e.g. 10**10000.
+        raise ValueError(message.format(_describe_value(speed))) from None
     if not math.isfinite(value) or value <= 0:
-        raise ValueError(f"speed must be a finite number greater than 0, got {speed!r}")
+        raise ValueError(message.format(_describe_value(speed)))
     return value
 
 

@@ -18,6 +18,9 @@ def test_build_parser_exposes_subcommands() -> None:
     assert parser.prog == "melotts-mblt"
     ui_args = parser.parse_args(["ui", "--share", "--host", "0.0.0.0", "--port", "7860"])
     assert (ui_args.share, ui_args.host, ui_args.port) == (True, "0.0.0.0", 7860)
+    # Short flags kept from the upstream `melo-ui` command (`-s` for --share, `-p` for --port).
+    short_args = parser.parse_args(["ui", "-s", "-p", "7861"])
+    assert (short_args.share, short_args.port) == (True, 7861)
     assert hasattr(parser.parse_args(["download"]), "_handler")
 
 
