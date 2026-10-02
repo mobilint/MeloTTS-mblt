@@ -93,9 +93,11 @@ def test_cli_disposes_the_model_on_success_and_failure(fail: bool, monkeypatch: 
     assert [instance.disposed for instance in _FakeTTS.instances] == [True]
 
 
-def _patch_tts_init(monkeypatch: pytest.MonkeyPatch, *, bert_fails: bool = False) -> dict[str, object]:
+def _patch_tts_init(
+    monkeypatch: pytest.MonkeyPatch, *, bert_fails: bool = False, bert_transfer_fails: bool = False
+) -> dict[str, object]:
     """Replace config, checkpoint, synthesizer, tokenizer, BERT, and MXQ resolution with recording fakes."""
-    seen: dict[str, object] = {"resolved": [], "synth": None, "bert_kwargs": None}
+    seen: dict[str, object] = {"resolved": [], "synth": None, "bert_kwargs": None, "bert": None}
 
     class _ModelHParams(dict):
         """``hps.model`` stand-in: attribute access plus ``**`` unpacking, like ``HParams``."""
@@ -132,13 +134,28 @@ def _patch_tts_init(monkeypatch: pytest.MonkeyPatch, *, bert_fails: bool = False
         def dispose(self) -> None:
             self.disposed = True
 
+    class _FakeLoadedBert:
+        def __init__(self, fail_transfer: bool) -> None:
+            self.fail_transfer = fail_transfer
+            self.disposed = False
+
+        def to(self, device: str) -> _FakeLoadedBert:
+            if self.fail_transfer:
+                raise RuntimeError("BERT device transfer failed")
+            return self
+
+        def dispose(self) -> None:
+            self.disposed = True
+
     class _FakeBert:
         @staticmethod
         def from_pretrained(*args: object, **kwargs: object) -> object:
             if bert_fails:
                 raise OSError("BERT unavailable")
             seen["bert_kwargs"] = kwargs
-            return types.SimpleNamespace(to=lambda device: types.SimpleNamespace(dispose=lambda: None))
+            bert = _FakeLoadedBert(fail_transfer=bert_transfer_fails)
+            seen["bert"] = bert
+            return bert
 
     def _resolve(repo_id: str, path: str) -> str:
         seen["resolved"].append((repo_id, path))
@@ -286,3 +303,25 @@ def test_webui_releases_loaded_models_when_a_later_model_fails(monkeypatch: pyte
     with pytest.raises(OSError, match="KR model unavailable"):
         _import_webui(monkeypatch, fail_language="KR")
     assert [instance.disposed for instance in _FakeTTS.instances] == [True]  # the English model
+
+
+def test_failed_bert_transfer_releases_bert_and_synthesizer(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _patch_tts_init(monkeypatch, bert_transfer_fails=True)
+
+    with pytest.raises(RuntimeError, match="BERT device transfer failed"):
+        TTS(language="KR", device="cpu", trust_remote_code=True)
+
+    assert seen["bert"].disposed is True
+    assert seen["synth"].disposed is True
+
+
+def test_webui_releases_models_when_ui_setup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    import gradio
+
+    def _broken_blocks(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("UI setup failed")
+
+    monkeypatch.setattr(gradio, "Blocks", _broken_blocks)
+    with pytest.raises(RuntimeError, match="UI setup failed"):
+        _import_webui(monkeypatch)
+    assert len(_FakeTTS.instances) == 2 and all(instance.disposed for instance in _FakeTTS.instances)

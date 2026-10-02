@@ -123,6 +123,8 @@ class TTS(nn.Module):
                 if bert_mxq_path is not None:
                     bert_kwargs["mxq_path"] = bert_mxq_path
 
+            # Keep a reference to the loaded BERT (it owns an NPU backend) before the transfer, so dispose() can
+            # still release it if .to(device) fails.
             self.bert = AutoModelForMaskedLM.from_pretrained(
                 hps.model.bert_model_id,
                 trust_remote_code=trust_remote_code,
@@ -132,7 +134,8 @@ class TTS(nn.Module):
                 target_cores=[hps.model.target_core],
                 target_device=hps.model.target_device,
                 **bert_kwargs,
-            ).to(device)
+            )
+            self.bert = self.bert.to(device)
     
         except BaseException:
             # Checkpoint, tokenizer, or BERT loading failed after the synthesizer's NPU backends were created.
