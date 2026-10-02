@@ -187,7 +187,7 @@ class MobilintTransformerCouplingBlockAndGenerator(nn.Module):
     def __init__(
         self,
         channels,
-        upsample_initial_channel,
+        upsample_factor,
         
         name_or_path: str = "",
         mxq_path: str = "",
@@ -202,7 +202,8 @@ class MobilintTransformerCouplingBlockAndGenerator(nn.Module):
         super().__init__()
         self.channels = channels
         self.half_channels = channels // 2
-        self.upsample_initial_channel = upsample_initial_channel
+        # Output audio samples per latent frame: the generator's total upsampling, prod(upsample_rates).
+        self.upsample_factor = upsample_factor
         
         self.npu_backend = MobilintNPUBackend(
             mxq_path=mxq_path,
@@ -272,7 +273,7 @@ class MobilintTransformerCouplingBlockAndGenerator(nn.Module):
 
             if end_index > x.shape[1]:
                 output_chunk = output_chunk[
-                    :, : (remaining_length * self.upsample_initial_channel), :
+                    :, : (remaining_length * self.upsample_factor), :
                 ]
 
             output_chunks.append(output_chunk)
@@ -350,17 +351,22 @@ class MobilintSynthesizerTrn(nn.Module):
         )
 
         # self.dec, self.flow all in one mxq
-        self.dec_flow = MobilintTransformerCouplingBlockAndGenerator(
-            inter_channels,
-            upsample_initial_channel,
-            
-            name_or_path=name_or_path,
-            mxq_path=decoder_mxq_path,
-            dev_no=dev_no,
-            core_mode="single",
-            target_cores=[target_core],
-            target_device=target_device,
-        )
+        try:
+            self.dec_flow = MobilintTransformerCouplingBlockAndGenerator(
+                inter_channels,
+                math.prod(upsample_rates),
+
+                name_or_path=name_or_path,
+                mxq_path=decoder_mxq_path,
+                dev_no=dev_no,
+                core_mode="single",
+                target_cores=[target_core],
+                target_device=target_device,
+            )
+        except BaseException:
+            # Release the already-created encoder backend instead of leaking it until process exit.
+            self.enc_p_sdp_dp.dispose()
+            raise
 
         if n_speakers <= 0:
             logger.warning(

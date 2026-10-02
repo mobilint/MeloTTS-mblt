@@ -1,3 +1,4 @@
+import math
 import re
 from typing import Optional
 
@@ -14,9 +15,12 @@ from .download_utils import (
     LANG_TO_HF_REPO_ID,
     load_or_download_config,
     load_or_download_model,
+    resolve_local_bert_mxq,
+    resolve_local_mxq,
 )
 from .models import MobilintSynthesizerTrn
 from .split_utils import split_sentence
+from .text.cleaner import clean_text
 
 
 class TTS(nn.Module):
@@ -67,6 +71,13 @@ class TTS(nn.Module):
         )
         hps.model.target_device = resolved_target_device
 
+        if local_files_only:
+            # mblt_npu downloads a missing MXQ from the Hub; resolve both synthesizer MXQs from the cache first so
+            # local_files_only never reaches the network (LocalEntryNotFoundError when they are not cached).
+            repo_id = LANG_TO_HF_REPO_ID[language]
+            hps.model.encoder_mxq_path = resolve_local_mxq(repo_id, hps.model.encoder_mxq_path)
+            hps.model.decoder_mxq_path = resolve_local_mxq(repo_id, hps.model.decoder_mxq_path)
+
         num_languages = hps.num_languages
         num_tones = hps.num_tones
         symbols = hps.symbols
@@ -82,35 +93,49 @@ class TTS(nn.Module):
             **hps.model,
         ).to(device)
 
-        model.eval()
-        self.model = model
-        self.symbol_to_id = {s: i for i, s in enumerate(symbols)}
-        self.hps = hps
-        self.device = device
+        try:
+            model.eval()
+            self.model = model
+            self.symbol_to_id = {s: i for i, s in enumerate(symbols)}
+            self.hps = hps
+            self.device = device
 
-        # load state_dict
-        checkpoint_dict = load_or_download_model(language, device, ckpt_path=ckpt_path, local_files_only=local_files_only)
-        self.model.load_state_dict(checkpoint_dict['model'], strict=True)
+            # load state_dict
+            checkpoint_dict = load_or_download_model(language, device, ckpt_path=ckpt_path, local_files_only=local_files_only)
+            self.model.load_state_dict(checkpoint_dict['model'], strict=True)
         
-        language = language.split('_')[0]
-        self.language = 'ZH_MIX_EN' if language == 'ZH' else language # we support a ZH_MIX_EN model
+            language = language.split('_')[0]
+            self.language = 'ZH_MIX_EN' if language == 'ZH' else language # we support a ZH_MIX_EN model
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            hps.model.bert_model_id,
-            trust_remote_code=trust_remote_code,
-            local_files_only=local_files_only,
-        )
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                hps.model.bert_model_id,
+                trust_remote_code=trust_remote_code,
+                local_files_only=local_files_only,
+            )
 
-        self.bert = AutoModelForMaskedLM.from_pretrained(
-            hps.model.bert_model_id,
-            trust_remote_code=trust_remote_code,
-            local_files_only=local_files_only,
+            bert_kwargs = {}
+            if local_files_only:
+                # Same reason as the synthesizer MXQs: resolve the BERT MXQ from the cache before mblt_npu sees it.
+                bert_mxq_path = resolve_local_bert_mxq(hps.model.bert_model_id)
+                if bert_mxq_path is not None:
+                    bert_kwargs["mxq_path"] = bert_mxq_path
 
-            dev_no=hps.model.dev_no,
-            target_cores=[hps.model.target_core],
-            target_device=hps.model.target_device,
-        ).to(device)
+            self.bert = AutoModelForMaskedLM.from_pretrained(
+                hps.model.bert_model_id,
+                trust_remote_code=trust_remote_code,
+                local_files_only=local_files_only,
+
+                dev_no=hps.model.dev_no,
+                target_cores=[hps.model.target_core],
+                target_device=hps.model.target_device,
+                **bert_kwargs,
+            ).to(device)
     
+        except BaseException:
+            # Checkpoint, tokenizer, or BERT loading failed after the synthesizer's NPU backends were created.
+            self.dispose()
+            raise
+
     @staticmethod
     def audio_numpy_concat(segment_data_list, sr, speed=1.0):
         audio_segments = []
@@ -129,9 +154,55 @@ class TTS(nn.Module):
             print(" > ===========================")
         return texts
     
+    def _bert_token_count(self, text, language):
+        """Number of BERT tokens (special tokens included) the text produces after normalization."""
+        if language in ["EN", "ZH_MIX_EN"]:
+            text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
+        _, _, _, word2ph = clean_text(text, language, tokenizer=self.tokenizer)
+        return len(word2ph)
+
+    def _bert_max_tokens(self):
+        config = getattr(getattr(self, "bert", None), "config", None)
+        limit = getattr(config, "max_position_embeddings", None) or getattr(self.tokenizer, "model_max_length", None)
+        # Tokenizers without a configured maximum report a huge sentinel value; fall back to BERT's usual 512.
+        return int(limit) if limit and limit < 100_000 else 512
+
+    def _fit_piece_to_bert(self, text, language, limit):
+        """Split ``text`` until every piece fits BERT's position limit.
+
+        Sentence splitting only breaks at punctuation, so unpunctuated input can exceed BERT's position embeddings,
+        which are computed for the whole input before the MXQ runs (synthesizer chunking cannot help). Bisect at
+        whitespace, or at the middle character for an unbroken run; each piece then goes through normalization,
+        G2P, and BERT on its own, so ``word2ph`` / phoneme alignment is recomputed per piece instead of truncated.
+        """
+        if self._bert_token_count(text, language) <= limit:
+            return [text]
+        words = text.split()
+        if len(words) > 1:
+            middle = len(words) // 2
+            left, right = " ".join(words[:middle]), " ".join(words[middle:])
+        else:
+            middle = len(text) // 2
+            left, right = text[:middle], text[middle:]
+        if not left.strip() or not right.strip():
+            return [text]
+        return self._fit_piece_to_bert(left, language, limit) + self._fit_piece_to_bert(right, language, limit)
+
+    def fit_pieces_to_bert(self, texts, language):
+        """Return ``texts`` with every piece split as needed to fit BERT's maximum input length."""
+        if getattr(self.hps.data, "disable_bert", False):
+            return list(texts)
+        limit = self._bert_max_tokens()
+        pieces = []
+        for text in texts:
+            pieces.extend(self._fit_piece_to_bert(text, language, limit))
+        return pieces
+
     def tts_to_file(self, text, speaker_id, output_path=None, sdp_ratio=0.2, noise_scale=0.6, noise_scale_w=0.8, speed=1.0, pbar=None, format=None, position=None, quiet=False):
+        if isinstance(speed, bool) or not isinstance(speed, (int, float)) or not math.isfinite(speed) or speed <= 0:
+            raise ValueError(f"speed must be a finite number greater than 0, got {speed!r}")
         language = self.language
-        texts = self.split_sentences_into_pieces(text, language, quiet)
+        texts = self.fit_pieces_to_bert(self.split_sentences_into_pieces(text, language, quiet), language)
         audio_list = []
         if pbar:
             tx = pbar(texts)
@@ -194,7 +265,9 @@ class TTS(nn.Module):
         self.model.launch()
 
     def dispose(self):
-        self.model.dispose()
+        model = getattr(self, "model", None)
+        if model is not None:
+            model.dispose()
         # ``self.bert`` is a sibling NPU-backed module built via
         # ``AutoModelForMaskedLM.from_pretrained``; if the loaded class is a
         # Mobilint Bert (``MobilintBertForMaskedLM``) it owns its own NPU
