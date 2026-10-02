@@ -82,7 +82,9 @@ class TTS(nn.Module):
         num_tones = hps.num_tones
         symbols = hps.symbols
 
-        model = MobilintSynthesizerTrn(
+        # A failure while building the synthesizer is cleaned up by MobilintSynthesizerTrn itself; from here on the
+        # NPU backends exist, so assign self.model before anything else can fail (including the device transfer).
+        self.model = MobilintSynthesizerTrn(
             len(symbols),
             hps.data.filter_length // 2 + 1,
             hps.train.segment_size // hps.data.hop_length,
@@ -91,9 +93,10 @@ class TTS(nn.Module):
             num_languages=num_languages,
             name_or_path=LANG_TO_HF_REPO_ID[language],
             **hps.model,
-        ).to(device)
+        )
 
         try:
+            model = self.model.to(device)
             model.eval()
             self.model = model
             self.symbol_to_id = {s: i for i, s in enumerate(symbols)}

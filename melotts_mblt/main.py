@@ -17,7 +17,7 @@ def _validate_speed(ctx, param, value):
 @click.argument('output_path')
 @click.option("--file", '-f', is_flag=True, show_default=True, default=False, help="Text is a file")
 @click.option('--language', '-l', default='EN_NEWEST', help='Language, defaults to English', type=click.Choice(['EN_NEWEST', 'KR'], case_sensitive=False))
-@click.option('--speaker', '-spk', default='EN-Newest', help='Speaker ID, only for English, leave empty for default, ignored if not English. If English, defaults to "EN-Newest"', type=click.Choice(['EN-Newest']))
+@click.option('--speaker', '-spk', default=None, help='Speaker ID, only for English, leave empty for default, ignored if not English. If English, defaults to "EN-Newest"', type=click.Choice(['EN-Newest']))
 @click.option('--speed', '-s', default=1.0, help='Speed (finite, greater than 0), defaults to 1.0', type=float, callback=_validate_speed)
 @click.option('--device', '-d', default='auto', help='Device, defaults to auto')
 @click.option('--local-files-only', '-c', is_flag=True, show_default=True, default=False, help='local_files_only option for TTS model')

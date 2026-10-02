@@ -211,3 +211,78 @@ def test_decoder_trims_the_last_chunk_by_the_upsampling_factor() -> None:
     _, audio = decoder(torch.zeros(1, channels, 64))
 
     assert audio.shape[-1] == 64 * factor
+
+
+@pytest.mark.parametrize(
+    ("args", "expect_warning"),
+    [
+        (["hi", "out.wav", "--language", "KR"], False),
+        (["hi", "out.wav", "--language", "KR", "--speaker", "EN-Newest"], True),
+        (["hi", "out.wav"], False),
+    ],
+)
+def test_cli_warns_about_a_speaker_only_when_one_is_given_for_non_english(
+    args: list[str], expect_warning: bool, monkeypatch: pytest.MonkeyPatch, recwarn: pytest.WarningsRecorder
+) -> None:
+    from melotts_mblt.cli.tts import run_tts
+
+    monkeypatch.setattr(melo_api, "TTS", lambda **kwargs: _FakeTTS(**kwargs))
+    assert run_tts(args) == 0
+    warned = any("specified a speaker" in str(w.message) for w in recwarn.list)
+    assert warned is expect_warning
+
+
+def test_failed_device_transfer_releases_the_synthesizer(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _patch_tts_init(monkeypatch)
+    synth_class = melo_api.MobilintSynthesizerTrn
+
+    class _FailingTransfer(synth_class):
+        def to(self, *args: object, **kwargs: object) -> torch.nn.Module:
+            raise RuntimeError("device transfer failed")
+
+    monkeypatch.setattr(melo_api, "MobilintSynthesizerTrn", _FailingTransfer)
+    with pytest.raises(RuntimeError, match="device transfer failed"):
+        TTS(language="KR", device="cpu", trust_remote_code=True)
+    assert seen["synth"].disposed is True
+
+
+def _import_webui(monkeypatch: pytest.MonkeyPatch, fail_language: str | None = None) -> types.ModuleType:
+    """Import a fresh ``melotts_mblt.app`` whose ``TTS`` is a recording fake (``fail_language`` raises)."""
+    import importlib
+    import sys
+
+    _FakeTTS.instances = []
+
+    def _fake_tts(*, language: str, **kwargs: object) -> _FakeTTS:
+        if language == fail_language:
+            raise OSError(f"{language} model unavailable")
+        return _FakeTTS(**kwargs)
+
+    monkeypatch.setattr(melo_api, "TTS", _fake_tts)
+    monkeypatch.delitem(sys.modules, "melotts_mblt.app", raising=False)
+    return importlib.import_module("melotts_mblt.app")
+
+
+def test_webui_disposes_models_when_serving_ends_and_reloads_on_relaunch(monkeypatch: pytest.MonkeyPatch) -> None:
+    from melotts_mblt.cli.ui import run_ui
+
+    app = _import_webui(monkeypatch)
+    launches: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        app.demo, "queue", lambda **kwargs: types.SimpleNamespace(launch=lambda **kw: launches.append(kw))
+    )
+
+    assert run_ui(host="127.0.0.1", port=7860) == 0
+    first = list(_FakeTTS.instances)
+    assert len(first) == 2 and all(instance.disposed for instance in first)
+    assert app.models == {}
+
+    assert run_ui() == 0  # in-process relaunch reloads, then releases again
+    assert len(_FakeTTS.instances) == 4 and all(instance.disposed for instance in _FakeTTS.instances)
+    assert len(launches) == 2
+
+
+def test_webui_releases_loaded_models_when_a_later_model_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(OSError, match="KR model unavailable"):
+        _import_webui(monkeypatch, fail_language="KR")
+    assert [instance.disposed for instance in _FakeTTS.instances] == [True]  # the English model

@@ -12,10 +12,29 @@ speed = 1.0
 import click
 
 device = 'auto'
-models = {
-    'EN_NEWEST': TTS(language='EN_NEWEST', device=device, trust_remote_code=True),
-    'KR': TTS(language='KR', device=device, trust_remote_code=True),
-}
+LANGUAGES = ('EN_NEWEST', 'KR')
+
+
+def _load_models():
+    """Load every WebUI model, releasing the ones already created if a later one fails."""
+    loaded = {}
+    try:
+        for language in LANGUAGES:
+            loaded[language] = TTS(language=language, device=device, trust_remote_code=True)
+    except BaseException:
+        _dispose_models(loaded)
+        raise
+    return loaded
+
+
+def _dispose_models(loaded):
+    """Release the NPU backends of ``loaded`` and empty it."""
+    while loaded:
+        _, model = loaded.popitem()
+        model.dispose()
+
+
+models = _load_models()
 speaker_ids = models['EN_NEWEST'].hps.data.spk2id
 
 default_text_dict = {
@@ -50,7 +69,14 @@ with gr.Blocks() as demo:
 @click.option('--host', '-h', default=None)
 @click.option('--port', '-p', type=int, default=None)
 def main(share, host, port):
-    demo.queue(api_open=False).launch(share=share, server_name=host, server_port=port)
+    # run_ui() can launch the WebUI in-process more than once; reload the models released by a previous run.
+    if not models:
+        models.update(_load_models())
+    try:
+        demo.queue(api_open=False).launch(share=share, server_name=host, server_port=port)
+    finally:
+        # Serving ended (or failed): release every model's NPU backends instead of leaving them to process exit.
+        _dispose_models(models)
 
 if __name__ == "__main__":
     main()
