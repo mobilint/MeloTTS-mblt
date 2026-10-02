@@ -1,0 +1,3 @@
+# Tests are development-only. setuptools already builds only the `melotts_mblt*` packages; prune them from the sdist
+# to pin that intent.
+prune tests

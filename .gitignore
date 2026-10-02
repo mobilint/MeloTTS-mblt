@@ -41,3 +41,12 @@ compile_commands.json
 *.swo
 .DS_Store
 Thumbs.db
+
+# Audio output, archives, model artifacts
+*.wav
+*.zip
+*.tar
+*.tar.gz
+*.mxq
+*.mblt
+*.onnx
