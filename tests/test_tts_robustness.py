@@ -325,3 +325,92 @@ def test_webui_releases_models_when_ui_setup_fails(monkeypatch: pytest.MonkeyPat
     with pytest.raises(RuntimeError, match="UI setup failed"):
         _import_webui(monkeypatch)
     assert len(_FakeTTS.instances) == 2 and all(instance.disposed for instance in _FakeTTS.instances)
+
+
+class _StagedBackend:
+    """Fake ``MobilintNPUBackend`` that raises at one post-construction stage and records ``dispose()``."""
+
+    fail_at: str | None = None
+    instances: list[_StagedBackend] = []
+
+    def __init__(self, **kwargs: object) -> None:
+        self.disposed = 0
+        _StagedBackend.instances.append(self)
+        stage = _StagedBackend.fail_at
+
+        def _check(name: str) -> None:
+            if stage == name:
+                raise RuntimeError(f"{name} failed")
+
+        self._check = _check
+        variant = types.SimpleNamespace(get_model_input_shape=lambda: (_check("shape"), [[1, 128]])[1])
+        self.mxq_model = types.SimpleNamespace(
+            get_num_model_variants=lambda: (_check("variants"), 1)[1],
+            get_model_variant_handle=lambda i: variant,
+        )
+
+    def create(self) -> None:
+        self._check("create")
+
+    def launch(self) -> None:
+        self._check("launch")
+
+    def dispose(self) -> None:
+        self.disposed += 1
+
+
+@pytest.mark.parametrize("stage", ["create", "launch", "variants", "shape"])
+def test_backend_is_disposed_when_initialization_fails_after_construction(
+    stage: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from melotts_mblt import models
+
+    _StagedBackend.fail_at, _StagedBackend.instances = stage, []
+    monkeypatch.setattr(models, "MobilintNPUBackend", _StagedBackend)
+    common = dict(
+        name_or_path="mobilint/MeloTTS-Korean",
+        mxq_path="x.mxq",
+        dev_no=0,
+        core_mode="single",
+        target_cores=["0:0"],
+        target_clusters=None,
+        target_device="aries-rb",
+    )
+
+    with pytest.raises(RuntimeError, match=f"{stage} failed"):
+        models._open_npu_backend(**common)
+    assert [backend.disposed for backend in _StagedBackend.instances] == [1]
+
+
+@pytest.mark.parametrize("which", ["encoder", "decoder"])
+def test_synthesizer_backends_release_a_partially_initialized_backend(
+    which: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both backend constructors go through the cleanup helper (a ``launch()`` failure disposes the backend)."""
+    from melotts_mblt import models
+
+    _StagedBackend.fail_at, _StagedBackend.instances = "launch", []
+    monkeypatch.setattr(models, "MobilintNPUBackend", _StagedBackend)
+    with pytest.raises(RuntimeError, match="launch failed"):
+        if which == "encoder":
+            models.MobilintTextEncoderAndDurationPredictor(8, 4, num_languages=1, num_tones=1, mxq_path="enc.mxq")
+        else:
+            models.MobilintTransformerCouplingBlockAndGenerator(4, 512, mxq_path="dec.mxq")
+    assert [backend.disposed for backend in _StagedBackend.instances] == [1]
+
+
+def test_open_npu_backend_returns_variant_lengths(monkeypatch: pytest.MonkeyPatch) -> None:
+    from melotts_mblt import models
+
+    _StagedBackend.fail_at, _StagedBackend.instances = None, []
+    monkeypatch.setattr(models, "MobilintNPUBackend", _StagedBackend)
+    backend, chunks = models._open_npu_backend(
+        name_or_path="mobilint/MeloTTS-Korean",
+        mxq_path="x.mxq",
+        dev_no=0,
+        core_mode="single",
+        target_cores=["0:0"],
+        target_clusters=None,
+        target_device="aries-rb",
+    )
+    assert chunks == [128] and backend.disposed == 0 and backend.name_or_path == "mobilint/MeloTTS-Korean"

@@ -10,6 +10,49 @@ from transformers.utils import logging
 
 from mblt_npu import MobilintNPUBackend
 
+
+def _open_npu_backend(
+    name_or_path,
+    mxq_path,
+    dev_no,
+    core_mode,
+    target_cores,
+    target_clusters,
+    target_device,
+    no_launch=False,
+):
+    """Create (and launch) an MXQ backend and read its input-length variants.
+
+    Any failure after the backend is constructed - in ``create()``, ``launch()``, or the variant / shape lookup -
+    disposes it before re-raising, so a partially initialized backend never leaks its NPU allocation.
+    ``MobilintNPUBackend.dispose()`` is safe to call more than once.
+
+    Returns:
+        ``(backend, allowed_chunks)``: the backend and the sequence length of each compiled model variant.
+    """
+    backend = MobilintNPUBackend(
+        mxq_path=mxq_path,
+        dev_no=dev_no,
+        core_mode=core_mode,
+        target_cores=target_cores,
+        target_clusters=target_clusters,
+        target_device=target_device,
+    )
+    try:
+        backend.name_or_path = name_or_path
+        backend.create()
+        if no_launch != True:
+            backend.launch()
+        num_model_variants = backend.mxq_model.get_num_model_variants()
+        allowed_chunks = [
+            backend.mxq_model.get_model_variant_handle(i).get_model_input_shape()[0][1]
+            for i in range(num_model_variants)
+        ]
+    except BaseException:
+        backend.dispose()
+        raise
+    return backend, allowed_chunks
+
 from . import commons
 
 logger = logging.get_logger(__name__)
@@ -47,25 +90,16 @@ class MobilintTextEncoderAndDurationPredictor(nn.Module):
         self.language_emb = nn.Embedding(num_languages, hidden_channels)
         nn.init.normal_(self.language_emb.weight, 0.0, hidden_channels**-0.5)
         
-        self.npu_backend = MobilintNPUBackend(
+        self.npu_backend, self.allowed_chunks = _open_npu_backend(
+            name_or_path=name_or_path,
             mxq_path=mxq_path,
             dev_no=dev_no,
             core_mode=core_mode,
             target_cores=target_cores,
             target_clusters=target_clusters,
             target_device=target_device,
+            no_launch=no_launch,
         )
-        
-        self.npu_backend.name_or_path = name_or_path
-        self.npu_backend.create()
-        if no_launch != True:
-            self.npu_backend.launch()
-        
-        num_model_variants = self.npu_backend.mxq_model.get_num_model_variants()
-        self.allowed_chunks = [
-            self.npu_backend.mxq_model.get_model_variant_handle(i).get_model_input_shape()[0][1]
-            for i in range(num_model_variants)
-        ]
     
     def __call__(
         self,
@@ -205,25 +239,16 @@ class MobilintTransformerCouplingBlockAndGenerator(nn.Module):
         # Output audio samples per latent frame: the generator's total upsampling, prod(upsample_rates).
         self.upsample_factor = upsample_factor
         
-        self.npu_backend = MobilintNPUBackend(
+        self.npu_backend, self.allowed_chunks = _open_npu_backend(
+            name_or_path=name_or_path,
             mxq_path=mxq_path,
             dev_no=dev_no,
             core_mode=core_mode,
             target_cores=target_cores,
             target_clusters=target_clusters,
             target_device=target_device,
+            no_launch=no_launch,
         )
-        
-        self.npu_backend.name_or_path = name_or_path
-        self.npu_backend.create()
-        if no_launch != True:
-            self.npu_backend.launch()
-        
-        num_model_variants = self.npu_backend.mxq_model.get_num_model_variants()
-        self.allowed_chunks = [
-            self.npu_backend.mxq_model.get_model_variant_handle(i).get_model_input_shape()[0][1]
-            for i in range(num_model_variants)
-        ]
         
     def __call__(self, x):
         device = x.device
