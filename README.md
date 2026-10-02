@@ -42,9 +42,11 @@ run `melotts-mblt download` once after installing.
 from melotts_mblt import TTS
 
 model = TTS(language="EN_NEWEST", device="cpu", trust_remote_code=True)
-speaker_ids = model.hps.data.spk2id
-model.tts_to_file("Did you ever hear a folk tale about a giant turtle?", speaker_ids["EN-Newest"], "en.wav", speed=1.0)
-model.dispose()
+try:
+    speaker_ids = model.hps.data.spk2id
+    model.tts_to_file("Did you ever hear a folk tale about a giant turtle?", speaker_ids["EN-Newest"], "en.wav", speed=1.0)
+finally:
+    model.dispose()  # release the NPU backends
 ```
 
 `trust_remote_code=True` lets the Mobilint BERT prosody encoder load its Hub remote code; the `melotts-mblt` CLI and

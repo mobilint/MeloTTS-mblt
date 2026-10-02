@@ -92,10 +92,12 @@ speed = 1.0
 # English 
 text = "Did you ever hear a folk tale about a giant turtle?"
 model = TTS(language='EN_NEWEST', device='cpu', trust_remote_code=True)
-speaker_ids = model.hps.data.spk2id
-
-output_path = 'en-us.wav'
-model.tts_to_file(text, speaker_ids['EN-Newest'], output_path, speed=speed)
+try:
+    speaker_ids = model.hps.data.spk2id
+    output_path = 'en-us.wav'
+    model.tts_to_file(text, speaker_ids['EN-Newest'], output_path, speed=speed)
+finally:
+    model.dispose()  # release the NPU backends
 ```
 
 #### Korean
@@ -108,10 +110,12 @@ speed = 1.0
 
 text = "안녕하세요! 오늘은 날씨가 정말 좋네요."
 model = TTS(language='KR', device='cpu', trust_remote_code=True)
-speaker_ids = model.hps.data.spk2id
-
-output_path = 'kr.wav'
-model.tts_to_file(text, speaker_ids['KR'], output_path, speed=speed)
+try:
+    speaker_ids = model.hps.data.spk2id
+    output_path = 'kr.wav'
+    model.tts_to_file(text, speaker_ids['KR'], output_path, speed=speed)
+finally:
+    model.dispose()  # release the NPU backends
 ```
 
 ## Original Authors

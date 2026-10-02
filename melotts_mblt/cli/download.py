@@ -16,7 +16,7 @@ def run_download() -> int:
     try:
         import nltk
 
-        nltk.download("averaged_perceptron_tagger_eng")
+        downloaded = nltk.download("averaged_perceptron_tagger_eng")
     except Exception as e:  # pragma: no cover
         print(
             "Could not download the NLTK tagger. Reinstall the package first:\n"
@@ -26,6 +26,16 @@ def run_download() -> int:
             "  import nltk\n"
             "  nltk.download('averaged_perceptron_tagger_eng')\n"
             f"Original error: {e}",
+            file=sys.stderr,
+        )
+        return 1
+    # nltk.download() reports many failures (network, permissions) by returning False instead of raising.
+    if not downloaded:
+        print(
+            "Downloading the NLTK tagger 'averaged_perceptron_tagger_eng' failed; see the NLTK messages above.\n"
+            "English text-to-speech needs it. Retry with network access, or run in Python:\n"
+            "  import nltk\n"
+            "  nltk.download('averaged_perceptron_tagger_eng')",
             file=sys.stderr,
         )
         return 1

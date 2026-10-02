@@ -42,11 +42,9 @@ def run_ui(share: bool = False, host: str | None = None, port: int | None = None
     if port is not None:
         click_args.extend(["--port", str(port)])
 
-    try:
-        melo_app.main(standalone_mode=False, args=click_args)
-    except SystemExit as e:
-        return int(e.code) if e.code is not None else 0
-    return 0
+    from ._click import invoke_click
+
+    return invoke_click(melo_app.main, click_args, prog_name="melotts-mblt ui")
 
 
 def _cmd_ui(args: argparse.Namespace) -> int:

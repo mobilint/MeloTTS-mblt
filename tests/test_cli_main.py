@@ -25,10 +25,11 @@ def test_tts_is_dispatched_before_argparse(monkeypatch: pytest.MonkeyPatch) -> N
     """Click owns the ``tts`` arguments, including ``--help`` and its own options."""
     seen: dict[str, object] = {}
 
-    def _fake_click_main(*, standalone_mode: bool, prog_name: str, args: list[str]) -> None:
-        seen.update(standalone_mode=standalone_mode, prog_name=prog_name, args=args)
+    class _FakeClickCommand:
+        def main(self, *, standalone_mode: bool, prog_name: str, args: list[str]) -> None:
+            seen.update(standalone_mode=standalone_mode, prog_name=prog_name, args=args)
 
-    monkeypatch.setattr("melotts_mblt.main.main", _fake_click_main)
+    monkeypatch.setattr("melotts_mblt.main.main", _FakeClickCommand())
     monkeypatch.setattr(cli_main, "build_parser", lambda: pytest.fail("argparse must not parse tts arguments"))
     monkeypatch.setattr(sys, "argv", ["melotts-mblt", "tts", "Hello", "out.wav", "--language", "KR"])
 
@@ -43,11 +44,40 @@ def test_tts_is_dispatched_before_argparse(monkeypatch: pytest.MonkeyPatch) -> N
 def test_run_tts_propagates_click_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
     from melotts_mblt.cli.tts import run_tts
 
-    def _exit(**kwargs: object) -> None:
-        raise SystemExit(3)
+    class _ExitingCommand:
+        def main(self, **kwargs: object) -> None:
+            raise SystemExit(3)
 
-    monkeypatch.setattr("melotts_mblt.main.main", _exit)
+    monkeypatch.setattr("melotts_mblt.main.main", _ExitingCommand())
     assert run_tts(["--help"]) == 3
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (["--bad-option"], "No such option"),
+        ([], "Missing argument"),
+        (["hi", "out.wav", "--language", "XX"], "Invalid value"),
+    ],
+)
+def test_tts_usage_errors_exit_2_without_traceback(
+    args: list[str], message: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Click usage errors are reported like standalone Click: usage on stderr and exit status 2."""
+    from melotts_mblt.cli.tts import run_tts
+
+    assert run_tts(args) == 2
+    err = capsys.readouterr().err
+    assert "Usage: melotts-mblt tts" in err
+    assert message in err
+    assert "Traceback" not in err
+
+
+def test_tts_help_exits_0(capsys: pytest.CaptureFixture[str]) -> None:
+    from melotts_mblt.cli.tts import run_tts
+
+    assert run_tts(["--help"]) == 0
+    assert "--language" in capsys.readouterr().out
 
 
 def test_ui_builds_click_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -55,7 +85,9 @@ def test_ui_builds_click_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
 
     calls: list[list[str]] = []
     fake_app = types.ModuleType("melotts_mblt.app")
-    fake_app.main = lambda *, standalone_mode, args: calls.append(args)  # type: ignore[attr-defined]
+    fake_app.main = types.SimpleNamespace(  # type: ignore[attr-defined]
+        main=lambda *, standalone_mode, prog_name, args: calls.append(args)
+    )
     monkeypatch.setitem(sys.modules, "melotts_mblt.app", fake_app)
     monkeypatch.setattr("melotts_mblt.app", fake_app, raising=False)
 
@@ -69,13 +101,28 @@ def test_download_fetches_nltk_tagger_then_unidic(monkeypatch: pytest.MonkeyPatc
 
     steps: list[object] = []
     fake_nltk = types.ModuleType("nltk")
-    fake_nltk.download = lambda resource: steps.append(("nltk", resource))  # type: ignore[attr-defined]
+    fake_nltk.download = lambda resource: steps.append(("nltk", resource)) or True  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "nltk", fake_nltk)
     monkeypatch.setitem(sys.modules, "unidic", types.ModuleType("unidic"))
     monkeypatch.setattr(download.subprocess, "call", lambda argv: steps.append(("call", argv[1:])) or 0)
 
     assert download.run_download() == 0
     assert steps == [("nltk", "averaged_perceptron_tagger_eng"), ("call", ["-m", "unidic", "download"])]
+
+
+def test_download_stops_when_nltk_reports_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``nltk.download`` returns False on many failures; the command must fail instead of continuing."""
+    from melotts_mblt.cli import download
+
+    fake_nltk = types.ModuleType("nltk")
+    fake_nltk.download = lambda resource: False  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "nltk", fake_nltk)
+    monkeypatch.setattr(download.subprocess, "call", lambda argv: pytest.fail("UniDic must not run after a failure"))
+
+    assert download.run_download() == 1
+    assert "averaged_perceptron_tagger_eng" in capsys.readouterr().err
 
 
 def test_no_command_prints_help(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

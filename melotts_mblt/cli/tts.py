@@ -33,12 +33,9 @@ def run_tts(args: Sequence[str], prog_name: str = "melotts-mblt tts") -> int:
     _require_tts_deps()
 
     from .. import main as melo_main
+    from ._click import invoke_click
 
-    try:
-        melo_main.main(standalone_mode=False, prog_name=prog_name, args=list(args))
-    except SystemExit as e:
-        return int(e.code) if e.code is not None else 0
-    return 0
+    return invoke_click(melo_main.main, args, prog_name=prog_name)
 
 
 def _cmd_tts(args: argparse.Namespace) -> int:
